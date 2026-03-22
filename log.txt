@@ -1,4 +1,15 @@
-  File "/home/runner/work/Funds_Startegy/Funds_Startegy/main.py", line 557
-    except: pass
-    ^^^^^^
-SyntaxError: invalid syntax
+
+
+Log Details:
+✅ 成功获取数据: 515080 (1516 条记录)
+✅ 成功获取数据: 510880 (4000 条记录)
+✅ 成功获取数据: 515180 (1522 条记录)
+✅ 成功获取数据: 513530 (953 条记录)
+✅ 成功获取数据: 563020 (553 条记录)
+✅ 成功获取数据: 510720 (452 条记录)
+✅ 成功获取数据: 159209 (244 条记录)
+✅ 成功获取数据: 510300 (3372 条记录)
+--- Strategy Summary ---
+Update Date: 2026-03-20
+Current Holding: 510880
+Total Return: 14.21%
