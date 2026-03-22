@@ -41,14 +41,39 @@ BENCHMARK = {"code": "510300", "name": "HS300"}
 os.makedirs(CONFIG['data_dir'], exist_ok=True)
 
 def get_fund_data(code):
-    url = f"https://fundmobapi.eastmoney.com/FundMNewApi/FundMNHisNetList?FCODE={code}&pageSize=4000&deviceid=1"
-    try:
-        r = requests.get(url, timeout=10).json()
-        df = pd.DataFrame([{'date': i['FSRQ'], 'close': float(i['DWJZ'])} for i in r['Datas']])
-        df['date'] = pd.to_datetime(df['date'])
-        return df.sort_values('date')
-    except: return pd.DataFrame()
+    # 模拟真实手机浏览器的请求头
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1',
+        'Referer': 'https://j5.dfcfw.com/',
+        'Host': 'fundmobapi.eastmoney.com'
+    }
+    url = f"https://fundmobapi.eastmoney.com/FundMNewApi/FundMNHisNetList"
+    params = {
+        'FCODE': code,
+        'pageSize': '4000',
+        'deviceid': '1',
+        'plat': 'Iphone',
+        'product': 'EFund',
+        'version': '6.2.9'
+    }
 
+    # 循环重试 3 次
+    for attempt in range(3):
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                if data and data.get('Datas'):
+                    df = pd.DataFrame([{'date': i['FSRQ'], 'close': float(i['DWJZ'])} for i in data['Datas']])
+                    df['date'] = pd.to_datetime(df['date'])
+                    print(f"✅ 成功获取数据: {code} ({len(df)} 条记录)")
+                    return df.sort_values('date')
+            print(f"⚠️ 第 {attempt+1} 次尝试获取 {code} 失败，状态码: {r.status_code}")
+        except Exception as e:
+            print(f"⚠️ 第 {attempt+1} 次尝试获取 {code} 出错: {e}")
+    
+    return pd.DataFrame()
+    
 def prepare_data():
     all_dfs = []
     # 1. 获取所有基金数据
