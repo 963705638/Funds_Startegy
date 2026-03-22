@@ -11,9 +11,12 @@ permissions:
 jobs:
   run-and-save:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # 加上这一行消除警告
     steps:
       - name: 1. 拉取仓库代码
         uses: actions/checkout@v4
+      # ... 其他步骤保持不变
 
       - name: 2. 安装 Python 环境
         uses: actions/setup-python@v5
