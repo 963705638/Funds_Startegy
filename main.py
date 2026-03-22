@@ -51,16 +51,44 @@ def get_fund_data(code):
 
 def prepare_data():
     all_dfs = []
+    # 1. 获取所有基金数据
     for code in FUND_POOL.keys():
-        df = get_fund_data(code).rename(columns={'close': f'close_{code}'})
-        all_dfs.append(df.set_index('date'))
-    bench = get_fund_data(BENCHMARK['code']).rename(columns={'close': 'close_bench'}).set_index('date')
-    all_dfs.append(bench)
+        df = get_fund_data(code)
+        if not df.empty:
+            df = df.rename(columns={'close': f'close_{code}'})
+            all_dfs.append(df.set_index('date'))
+        else:
+            print(f"⚠️ 警告: 无法获取基金 {code} 的数据，跳过该基金。")
+    
+    # 2. 获取基准数据
+    bench = get_fund_data(BENCHMARK['code'])
+    if not bench.empty:
+        bench = bench.rename(columns={'close': 'close_bench'}).set_index('date')
+        all_dfs.append(bench)
+    else:
+        raise Exception("❌ 严重错误: 无法获取基准(HS300)数据，回测无法继续。")
+    
+    # 3. 合并数据
+    # 使用 inner join 确保日期对齐，或者 outer join 后填充
     merged = pd.concat(all_dfs, axis=1).ffill().dropna()
+    
+    # 4. 把日期从 Index 变回正常的列
+    merged = merged.reset_index()
+    
+    # 5. 计算乖离率
     for code in FUND_POOL.keys():
-        ma = merged[f'close_{code}'].rolling(CONFIG['ma_period']).mean()
-        merged[f'dev_{code}'] = merged[f'close_{code}'] / ma - 1
-    return merged[merged.index >= CONFIG['start_date']].reset_index()
+        col_name = f'close_{code}'
+        if col_name in merged.columns:
+            ma = merged[col_name].rolling(CONFIG['ma_period']).mean()
+            merged[f'dev_{code}'] = merged[col_name] / ma - 1
+            
+    # 确保最后返回的 df 包含 date 列
+    if 'date' not in merged.columns:
+        # 如果还是没有，尝试强制转换
+        merged.index.name = 'date'
+        merged = merged.reset_index()
+        
+    return merged[merged['date'] >= CONFIG['start_date']]
 
 def run_strategy(df):
     cap = CONFIG['initial_capital']
