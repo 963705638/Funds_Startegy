@@ -1,39 +1,40 @@
-name: Run Script Twice Daily
+name: Dividend Strategy Automation
 
 on:
   schedule:
-    - cron: '0 * * * *'   # 
-  workflow_dispatch:
+    - cron: '30 7 * * 1-5' # 北京时间周一至周五 15:30 运行
+  workflow_dispatch:      # 支持手动点击按钮运行
 
 permissions:
-  contents: write   # ⭐关键就是这行
+  contents: write         # 允许机器人提交 log.txt 和数据
 
 jobs:
-  run-job:
+  run-and-save:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
+      - name: 1. 拉取仓库代码
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: 2. 安装 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install deps
-        run: pip install pandas numpy requests matplotlib openpyxl
+      - name: 3. 安装依赖插件
+        run: pip install pandas numpy requests matplotlib
 
-      - name: Make script executable
-        run: chmod +x run.sh
+      - name: 4. 运行策略脚本
+        env:
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          TZ: Asia/Shanghai
+        run: python main.py
 
-      - name: Run script
-        run: ./run.sh
-
-      - name: Commit logs
+      - name: 5. 自动保存日志和数据到 GitHub
         run: |
-          git config user.name "github-actions"
+          git config user.name "Strategy-Bot"
           git config user.email "actions@github.com"
-          git add log.txt fund_data 
-          git commit -m "update log" || echo "no changes"
+          git add log.txt fund_data/
+          # 只有在有变化时才提交，防止报错
+          git commit -m "自动更新: $(date +'%Y-%m-%d %H:%M')" || echo "没有检测到文件更新"
           git push
