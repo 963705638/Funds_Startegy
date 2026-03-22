@@ -40,24 +40,16 @@ BENCHMARK = {"code": "510300", "name": "HS300"}
 
 os.makedirs(CONFIG['data_dir'], exist_ok=True)
 
+# 1. 增强版数据获取 (防屏蔽)
 def get_fund_data(code):
-    # 模拟真实手机浏览器的请求头
     headers = {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1',
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15',
         'Referer': 'https://j5.dfcfw.com/',
         'Host': 'fundmobapi.eastmoney.com'
     }
     url = f"https://fundmobapi.eastmoney.com/FundMNewApi/FundMNHisNetList"
-    params = {
-        'FCODE': code,
-        'pageSize': '4000',
-        'deviceid': '1',
-        'plat': 'Iphone',
-        'product': 'EFund',
-        'version': '6.2.9'
-    }
+    params = {'FCODE': code, 'pageSize': '4000', 'deviceid': '1', 'plat': 'Iphone', 'product': 'EFund', 'version': '6.2.9'}
 
-    # 循环重试 3 次
     for attempt in range(3):
         try:
             r = requests.get(url, params=params, headers=headers, timeout=15)
@@ -66,55 +58,40 @@ def get_fund_data(code):
                 if data and data.get('Datas'):
                     df = pd.DataFrame([{'date': i['FSRQ'], 'close': float(i['DWJZ'])} for i in data['Datas']])
                     df['date'] = pd.to_datetime(df['date'])
-                    print(f"✅ 成功获取数据: {code} ({len(df)} 条记录)")
                     return df.sort_values('date')
-            print(f"⚠️ 第 {attempt+1} 次尝试获取 {code} 失败，状态码: {r.status_code}")
         except Exception as e:
-            print(f"⚠️ 第 {attempt+1} 次尝试获取 {code} 出错: {e}")
-    
+            pass
     return pd.DataFrame()
-    
+
+# 2. 修复版数据合并 (防止 Date 列丢失)
 def prepare_data():
     all_dfs = []
-    # 1. 获取所有基金数据
     for code in FUND_POOL.keys():
         df = get_fund_data(code)
         if not df.empty:
             df = df.rename(columns={'close': f'close_{code}'})
             all_dfs.append(df.set_index('date'))
-        else:
-            print(f"⚠️ 警告: 无法获取基金 {code} 的数据，跳过该基金。")
-    
-    # 2. 获取基准数据
+            
     bench = get_fund_data(BENCHMARK['code'])
     if not bench.empty:
         bench = bench.rename(columns={'close': 'close_bench'}).set_index('date')
         all_dfs.append(bench)
     else:
-        raise Exception("❌ 严重错误: 无法获取基准(HS300)数据，回测无法继续。")
-    
-    # 3. 合并数据
-    # 使用 inner join 确保日期对齐，或者 outer join 后填充
-    merged = pd.concat(all_dfs, axis=1).ffill().dropna()
-    
-    # 4. 把日期从 Index 变回正常的列
-    merged = merged.reset_index()
-    
-    # 5. 计算乖离率
+        raise Exception("无法获取基准数据(HS300)")
+
+    merged = pd.concat(all_dfs, axis=1).ffill().dropna().reset_index()
+    if 'date' not in merged.columns and 'index' in merged.columns:
+        merged = merged.rename(columns={'index': 'date'})
+        
     for code in FUND_POOL.keys():
         col_name = f'close_{code}'
         if col_name in merged.columns:
             ma = merged[col_name].rolling(CONFIG['ma_period']).mean()
             merged[f'dev_{code}'] = merged[col_name] / ma - 1
             
-    # 确保最后返回的 df 包含 date 列
-    if 'date' not in merged.columns:
-        # 如果还是没有，尝试强制转换
-        merged.index.name = 'date'
-        merged = merged.reset_index()
-        
-    return merged[merged['date'] >= CONFIG['start_date']]
+    return merged[merged['date'] >= CONFIG['start_date']].reset_index(drop=True)
 
+# 3. 回测与信号生成引擎
 def run_strategy(df):
     cap = CONFIG['initial_capital']
     hold_code, hold_price, hold_qty = None, 0, 0
@@ -125,21 +102,21 @@ def run_strategy(df):
     for i, row in df.iterrows():
         date = row['date']
         money_val *= daily_m_rate
-        devs = {c: row[f'dev_{c}'] for c in FUND_POOL.keys()}
+        devs = {c: row[f'dev_{c}'] for c in FUND_POOL.keys() if f'dev_{c}' in row}
         
-        # 1. 卖出/止损逻辑
+        # 卖出/止损
         if hold_code:
             cur_p = row[f'close_{hold_code}']
-            if devs[hold_code] > CONFIG['sell_threshold'] or (cur_p/hold_price-1) < CONFIG['stop_loss_threshold']:
+            if devs.get(hold_code, 0) > CONFIG['sell_threshold'] or (cur_p/hold_price-1) < CONFIG['stop_loss_threshold']:
                 money_val = hold_qty * cur_p * (1 - CONFIG['commission_rate'])
                 trades.append({'date': date, 'action': 'SELL', 'code': hold_code, 'price': cur_p})
                 hold_code, hold_qty = None, 0
 
-        # 2. 买入/换仓逻辑
+        # 买入/换仓
         candidates = {c: d for c, d in devs.items() if d < CONFIG['buy_threshold']}
         if candidates:
             best = min(candidates, key=candidates.get)
-            if not hold_code or devs[best] < (devs[hold_code] - CONFIG['switch_threshold']):
+            if not hold_code or devs[best] < (devs.get(hold_code, 0) - CONFIG['switch_threshold']):
                 if hold_code:
                     money_val = hold_qty * row[f'close_{hold_code}'] * (1 - CONFIG['commission_rate'])
                 buy_cap = (money_val + cap) * (1 - CONFIG['commission_rate'])
@@ -148,11 +125,12 @@ def run_strategy(df):
                 money_val, cap = 0, 0
                 trades.append({'date': date, 'action': 'BUY/SWITCH', 'code': best, 'price': hold_price})
 
-        total = cap + money_val + (hold_qty * row[f'close_{hold_code}'] if hold_code else 0)
+        total = cap + money_val + (hold_qty * row.get(f'close_{hold_code}', 0) if hold_code else 0)
         history.append({'date': date, 'value': total, 'holding': hold_code or 'CASH', 'bench_close': row['close_bench']})
     
-    return pd.DataFrame(history), trades
+    return pd.DataFrame(history), trades, df
 
+# 4. 绘图
 def plot_report(hist):
     plt.figure(figsize=(10, 6))
     strategy_ret = (hist['value'] / hist['value'].iloc[0] - 1) * 100
@@ -167,12 +145,11 @@ def plot_report(hist):
     plt.close()
     return img_path
 
+# 5. 邮件发送
 def send_email(subject, content, img_path=None):
     sender = os.environ.get('EMAIL_SENDER')
     pwd = os.environ.get('EMAIL_PASSWORD')
-    if not sender or not pwd:
-        print("❌ Error: Missing Email Credentials.")
-        return
+    if not sender or not pwd: return
 
     msg = MIMEMultipart()
     msg['Subject'] = subject
@@ -191,41 +168,78 @@ def send_email(subject, content, img_path=None):
         with smtplib.SMTP_SSL(smtp_server, 465) as server:
             server.login(sender, pwd)
             server.sendmail(sender, [sender], msg.as_string())
-        print("✅ Email Sent Successfully!")
     except Exception as e:
-        print(f"❌ Failed to send email: {e}")
+        print(f"邮件发送失败: {e}")
 
+# 6. 主程序 (专注于实盘指令生成)
 def main():
     log_capture = io.StringIO()
     sys.stdout = log_capture
+    
     try:
         data = prepare_data()
-        hist, trades = run_strategy(data)
+        hist, trades, raw_df = run_strategy(data)
         img_path = plot_report(hist)
         
-        last_day = hist.iloc[-1]
-        print(f"--- Strategy Summary ---")
-        print(f"Update Date: {last_day['date'].strftime('%Y-%m-%d')}")
-        print(f"Current Holding: {last_day['holding']}")
-        print(f"Total Return: {((last_day['value']/CONFIG['initial_capital'])-1)*100:.2f}%")
+        # --- 获取最新一日的数据状态 ---
+        last_date = data['date'].iloc[-1]
+        last_date_str = last_date.strftime('%Y-%m-%d')
+        last_hist = hist.iloc[-1]
+        last_raw = raw_df.iloc[-1]
         
-        today_trade = [t for t in trades if t['date'].date() == datetime.now().date()]
-        subject = f"Dividend Report - {datetime.now().strftime('%Y-%m-%d')}"
-        trade_msg = ""
-        if today_trade:
-            subject = "⚠️【交易提醒】红利策略有变动"
-            trade_msg = "🚨 Action Required:\n" + "\n".join([f"{t['action']} {t['code']} @ {t['price']}" for t in today_trade])
+        # --- 提取今日交易指令 ---
+        today_trades = [t for t in trades if t['date'].date() == last_date.date()]
         
-        report_text = trade_msg + "\n\nLog Details:\n" + log_capture.getvalue()
+        # 构建指令头部
+        if today_trades:
+            subject = f"⚠️【交易指令】红利策略调仓 - {last_date_str}"
+            instruction_text = "🚨 【今日需执行以下操作】\n"
+            for t in today_trades:
+                action_cn = "买入" if "BUY" in t['action'] else "卖出"
+                fund_name = FUND_POOL.get(t['code'], t['code'])
+                instruction_text += f"   ➡️ {action_cn}: {fund_name} ({t['code']}) | 触发价: {t['price']:.4f}\n"
+        else:
+            subject = f"📊【持仓观望】红利策略日报 - {last_date_str}"
+            instruction_text = "⏸️ 【今日无操作信号，继续持有当前仓位】\n"
+
+        # 构建数据看板
+        dashboard = []
+        dashboard.append("=" * 40)
+        dashboard.append(f"📅 数据更新至: {last_date_str}")
+        dashboard.append(f"🏦 当前持有标的: {FUND_POOL.get(last_hist['holding'], last_hist['holding'])}")
+        dashboard.append(f"💰 模拟账户净值: {last_hist['value']:.2f} 元 (初始 {CONFIG['initial_capital']})")
+        total_ret = ((last_hist['value'] / CONFIG['initial_capital']) - 1) * 100
+        dashboard.append(f"📈 策略累计收益: {total_ret:.2f}%")
+        dashboard.append("=" * 40)
+        
+        # 构建各基金的乖离率雷达 (让你知道离买卖点还有多远)
+        dashboard.append("\n📡 【成分基乖离率扫描】 (低于 -3% 触发买入，高于 7% 触发卖出)")
+        for code, name in FUND_POOL.items():
+            col = f'dev_{code}'
+            if col in last_raw:
+                dev_val = last_raw[col]
+                # 加点视觉提示
+                if dev_val < CONFIG['buy_threshold']: icon = "🟢 [超跌]"
+                elif dev_val > CONFIG['sell_threshold']: icon = "🔴 [超涨]"
+                else: icon = "⚪ [正常]"
+                dashboard.append(f"   {icon} {name} ({code}): {dev_val*100:>5.2f}%")
+        
+        # 拼接最终邮件内容
+        final_report = f"{instruction_text}\n" + "\n".join(dashboard)
+        
+        # 恢复标准输出打印
         sys.stdout = sys.__stdout__
-        print(report_text)
+        print(final_report)
+        print("\n(正在发送邮件并保存日志...)")
         
-        send_email(subject, report_text, img_path)
-        with open("log.txt", "w", encoding='utf-8') as f: f.write(report_text)
+        send_email(subject, final_report, img_path)
+        
+        with open("log.txt", "w", encoding='utf-8') as f: 
+            f.write(final_report + "\n\n--- 历史详细日志 ---\n" + log_capture.getvalue())
             
     except Exception as e:
         sys.stdout = sys.__stdout__
-        print(f"Main Error: {e}")
+        print(f"❌ 运行报错: {e}")
 
 if __name__ == "__main__":
     main()
