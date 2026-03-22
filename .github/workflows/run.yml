@@ -1,43 +1,46 @@
-name: Dividend Strategy Automation
+name: Fund Automation
 
 on:
   schedule:
-    - cron: '30 7 * * 1-5' # 北京时间周一至周五 15:30 运行
-  workflow_dispatch:      # 支持手动点击按钮运行
+    # 每天北京时间 15:30 运行 (UTC 7:30)
+    - cron: '30 7 * * 1-5' 
+  workflow_dispatch:      # 允许你在 GitHub 页面手动点击按钮测试
 
 permissions:
-  contents: write         # 允许机器人提交 log.txt 和数据
+  contents: write         # ⭐至关重要：允许机器人修改你的仓库文件（存日志和图片）
 
 jobs:
   run-and-save:
     runs-on: ubuntu-latest
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # 加上这一行消除警告
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # 消除你之前遇到的 Node.js 20 警告
+    
     steps:
       - name: 1. 拉取仓库代码
         uses: actions/checkout@v4
-      # ... 其他步骤保持不变
 
       - name: 2. 安装 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: 3. 安装依赖插件
+      - name: 3. 安装必要的依赖库
         run: pip install pandas numpy requests matplotlib
 
-      - name: 4. 运行策略脚本
+      - name: 4. 执行 Python 策略脚本
         env:
+          # ⭐将 GitHub Secrets 里的变量注入到系统环境，供 Python 读取
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          TZ: Asia/Shanghai
+          TZ: Asia/Shanghai  # 设置时区为北京时间
         run: python main.py
 
-      - name: 5. 自动保存日志和数据到 GitHub
+      - name: 5. 自动提交日志和图片到 GitHub 仓库
         run: |
-          git config user.name "Strategy-Bot"
+          git config user.name "github-actions"
           git config user.email "actions@github.com"
+          # 添加生成的所有数据文件和日志
           git add log.txt fund_data/
-          # 只有在有变化时才提交，防止报错
+          # 只有在文件有变动时才提交，防止报错
           git commit -m "自动更新: $(date +'%Y-%m-%d %H:%M')" || echo "没有检测到文件更新"
           git push
