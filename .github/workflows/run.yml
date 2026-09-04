@@ -1,39 +1,46 @@
-name: Run Script Twice Daily
+name: Fund Automation
 
 on:
   schedule:
-    - cron: '0 * * * *'   # 
-  workflow_dispatch:
+    # 每天北京时间 15:30 运行 (UTC 7:30)
+    - cron: '30 7 * * 1-5' 
+  workflow_dispatch:      # 允许你在 GitHub 页面手动点击按钮测试
 
 permissions:
-  contents: write   # ⭐关键就是这行
+  contents: write         # ⭐至关重要：允许机器人修改你的仓库文件（存日志和图片）
 
 jobs:
-  run-job:
+  run-and-save:
     runs-on: ubuntu-latest
-
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true  # 消除你之前遇到的 Node.js 20 警告
+    
     steps:
-      - name: Checkout
+      - name: 1. 拉取仓库代码
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: 2. 安装 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install deps
-        run: pip install pandas numpy requests matplotlib openpyxl
+      - name: 3. 安装必要的依赖库
+        run: pip install pandas numpy requests matplotlib
 
-      - name: Make script executable
-        run: chmod +x run.sh
+      - name: 4. 执行 Python 策略脚本
+        env:
+          # ⭐将 GitHub Secrets 里的变量注入到系统环境，供 Python 读取
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          TZ: Asia/Shanghai  # 设置时区为北京时间
+        run: python main.py
 
-      - name: Run script
-        run: ./run.sh
-
-      - name: Commit logs
+      - name: 5. 自动提交日志和图片到 GitHub 仓库
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add log.txt fund_data 
-          git commit -m "update log" || echo "no changes"
+          # 添加生成的所有数据文件和日志
+          git add log.txt fund_data/
+          # 只有在文件有变动时才提交，防止报错
+          git commit -m "自动更新: $(date +'%Y-%m-%d %H:%M')" || echo "没有检测到文件更新"
           git push
